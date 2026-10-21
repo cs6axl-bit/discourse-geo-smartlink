@@ -1,0 +1,7 @@
+en:
+  site_settings:
+    geo_smartlink_enabled: "Country smart links at /go/<key> (offer_geo_links). Off = every /go link goes to the fallback URL."
+    geo_smartlink_mmdb_path: "Path (inside the container) to the MaxMind-format IP → country database (DB-IP Country Lite)."
+    geo_smartlink_default_country: "Country used when the user's country, the click IP and the email domain all give nothing."
+    geo_smartlink_last_resort_country: "If the visitor's country has no version of the offer and there is no '*' fallback row, send them to this country's version (empty = go to the fallback URL)."
+    geo_smartlink_fallback_url: "Where to send clicks for unknown keys or when no version fits."

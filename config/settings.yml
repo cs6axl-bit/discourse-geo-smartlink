@@ -1,0 +1,11 @@
+plugins:
+  geo_smartlink_enabled:
+    default: true
+  geo_smartlink_mmdb_path:
+    default: "/shared/geo/dbip-country-lite.mmdb"
+  geo_smartlink_default_country:
+    default: "US"
+  geo_smartlink_last_resort_country:
+    default: ""
+  geo_smartlink_fallback_url:
+    default: "/"
