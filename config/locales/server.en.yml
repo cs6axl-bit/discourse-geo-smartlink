@@ -5,3 +5,6 @@ en:
     geo_smartlink_default_country: "Country used when the user's country, the click IP and the email domain all give nothing."
     geo_smartlink_last_resort_country: "If the visitor's country has no version of the offer and there is no '*' fallback row, send them to this country's version (empty = go to the fallback URL)."
     geo_smartlink_fallback_url: "Where to send clicks for unknown keys or when no version fits."
+    geo_smartlink_unavailable_enabled: "The /offer-unavailable page (offers available in the visitor's country, same category first). Also used by /go when the visitor's country has no version, and by discourse-content-redirector >= 0.7.0."
+    geo_smartlink_unavailable_use_ship_lists: "Also treat an offer's ship list (offer_link_rules.ship_*) as a block, not only the network's country rules. Off = only hard network blocks and dead links."
+    geo_smartlink_unavailable_max_cards: "How many offers the /offer-unavailable page shows."

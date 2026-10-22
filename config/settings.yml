@@ -9,3 +9,10 @@ plugins:
     default: ""
   geo_smartlink_fallback_url:
     default: "/"
+  geo_smartlink_unavailable_enabled:
+    default: true
+  geo_smartlink_unavailable_use_ship_lists:
+    default: false
+  geo_smartlink_unavailable_max_cards:
+    default: 6
+    type: integer

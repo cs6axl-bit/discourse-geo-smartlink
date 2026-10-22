@@ -15,3 +15,17 @@ key), `{email_id}` and `{user_id}`. Every click is logged to `geo_smartlink_clic
 
 Both tables are created and filled outside the plugin (supshop repo `admin/giddyup/build-geo-links.mjs`) and need
 `GRANT SELECT` (links) / `GRANT SELECT, INSERT` + sequence usage (clicks) for the `discourse` role.
+
+## "Offer not available" page (0.2.0)
+
+`/offer-unavailable?u=<urlsafe base64 of the clicked offer url>&r=geo|down|stuck&c=<category id>` tells the visitor
+the offer can't be opened from their country (or is down / didn't load) and shows the best offers available there:
+same category first, then by score (`offer_fallback_cards`). Country = click IP (DB-IP), then the user's known
+country, then the email domain; an unknown country only gets offers without country limits. Each offer link carries
+the original click's `email_id` / `subid2` (+ `sub4` / `sub5` on Everflow, `extclid` on ClickBank, `sub2=<key>-na`,
+`na=1`) and goes through `/content` so the click is logged. Views are logged to `offer_unavailable_views`.
+
+`GeoSmartlink.check_url(url, country)` reads `offer_link_rules` (network country rules, link health) and is used by
+discourse-content-redirector >= 0.7.0 to send known dead ends (Everflow answers HTTP 204 = blank for blocked
+countries) straight to this page. `/go/<key>` with no version for the visitor's country also lands here.
+Tables are built by the supshop repo `admin/discourse/build-offer-fallback.mjs` (daily, after the link check).
