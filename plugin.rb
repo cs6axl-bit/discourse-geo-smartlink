@@ -419,6 +419,7 @@ after_initialize do
 
   Discourse::Application.routes.append do
     mount ::GeoSmartlink::Engine, at: "/go"
-    mount ::GeoSmartlink::UnavailableEngine, at: "/offer-unavailable"
+    # explicit name: isolate_namespace gives both engines the route name "geo_smartlink" (boot fails on the duplicate)
+    mount ::GeoSmartlink::UnavailableEngine, at: "/offer-unavailable", as: "geo_smartlink_unavailable"
   end
 end
