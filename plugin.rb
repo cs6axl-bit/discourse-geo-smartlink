@@ -2,7 +2,7 @@
 
 # name: discourse-geo-smartlink
 # about: Country smart links at /go/<key> (offer_geo_links) plus the /offer-unavailable page: when an offer link would dead-end for the visitor (country blocked by the network, link down, or the click got stuck) the visitor sees the best offers available in their country, same category first. GeoSmartlink.check_url is used by discourse-content-redirector >= 0.7.0.
-# version: 0.2.0
+# version: 0.3.0
 # authors: supshop
 # url: https://github.com/cs6axl-bit/discourse-geo-smartlink
 
@@ -293,19 +293,56 @@ after_initialize do
       limit = SiteSetting.geo_smartlink_unavailable_max_cards.to_i.clamp(1, 24)
       shown = (same + other).first(limit)
 
+      view_id = nil
       begin
-        DB.exec(<<~SQL, r: reason, cc: cc, src: cc_src, uid: user_id, eid: email_id, o: orig.to_s[0, 2000], cat: cat, s: shown.map(&:vsl_id).join(","))
-          INSERT INTO offer_unavailable_views (reason, country, country_source, user_id, email_id, orig_url, category_id, shown)
-          VALUES (:r, :cc, :src, :uid, :eid, :o, :cat, :s)
+        # 0.3.0: + visitor ip / user agent / referer / language (bot vs human review), id for the card-click log
+        view_id = DB.query_single(<<~SQL, r: reason, cc: cc, src: cc_src, uid: user_id, eid: email_id, o: orig.to_s[0, 2000], cat: cat, s: shown.map(&:vsl_id).join(","),
+          INSERT INTO offer_unavailable_views (reason, country, country_source, user_id, email_id, orig_url, category_id, shown, ip, user_agent, referer, accept_language)
+          VALUES (:r, :cc, :src, :uid, :eid, :o, :cat, :s, :ip, :ua, :ref, :al)
+          RETURNING id
         SQL
+          ip: request.remote_ip.to_s[0, 64], ua: request.user_agent.to_s[0, 512].presence, ref: request.referer.to_s[0, 1000].presence,
+          al: request.headers["Accept-Language"].to_s[0, 200].presence).first
       rescue => e
         Rails.logger.warn("[#{::GeoSmartlink::PLUGIN_NAME}] unavailable log: #{e.class}: #{e.message}")
       end
 
       response.headers["Cache-Control"] = "no-store"
-      render html: page_html(reason, cc, shown, orig, user_id, email_id).html_safe
+      render html: page_html(reason, cc, shown, orig, user_id, email_id, view_id).html_safe
     rescue => e
       Rails.logger.warn("[#{::GeoSmartlink::PLUGIN_NAME}] unavailable: #{e.class}: #{e.message}")
+      redirect_to(SiteSetting.geo_smartlink_fallback_url.presence || "/", allow_other_host: true)
+    end
+
+    # /offer-unavailable/c?v=<view id>&id=<vsl id>&p=<position>: logs the card click (offer_unavailable_clicks), then goes
+    # to the same /content link the card had before 0.3.0. The target is rebuilt server-side from the view + card rows
+    # (no url in the params = no open redirect).
+    def card
+      view_id = params[:v].to_s[/\A\d{1,18}\z/]&.to_i
+      vsl_id = params[:id].to_s[/\A\d{1,9}\z/]&.to_i
+      pos = params[:p].to_s[/\A\d{1,3}\z/]&.to_i
+      view = view_id && DB.query("SELECT orig_url, user_id, email_id FROM offer_unavailable_views WHERE id = :id", id: view_id).first
+      c = vsl_id && DB.query("SELECT vsl_id, source, link FROM offer_fallback_cards WHERE vsl_id = :id", id: vsl_id).first
+      orig = view&.orig_url.presence
+      unless c # cards are rebuilt daily: an old page's card may be gone → show the page again
+        return redirect_to(orig ? ::GeoSmartlink.unavailable_path(orig, "geo") : (SiteSetting.geo_smartlink_fallback_url.presence || "/"), allow_other_host: true)
+      end
+      user_id = view&.user_id
+      email_id = view&.email_id
+      href = card_href(c.link, orig, user_id, email_id)
+      begin
+        DB.exec(<<~SQL, v: view_id, vid: c.vsl_id, src: c.source, p: pos, t: href.to_s[0, 2000], uid: user_id, eid: email_id,
+          INSERT INTO offer_unavailable_clicks (view_id, vsl_id, source, position, target_url, user_id, email_id, ip, user_agent)
+          VALUES (:v, :vid, :src, :p, :t, :uid, :eid, :ip, :ua)
+        SQL
+          ip: request.remote_ip.to_s[0, 64], ua: request.user_agent.to_s[0, 512].presence)
+      rescue => e
+        Rails.logger.warn("[#{::GeoSmartlink::PLUGIN_NAME}] unavailable click log: #{e.class}: #{e.message}")
+      end
+      response.headers["Cache-Control"] = "no-store"
+      redirect_to href, allow_other_host: true
+    rescue => e
+      Rails.logger.warn("[#{::GeoSmartlink::PLUGIN_NAME}] unavailable click: #{e.class}: #{e.message}")
       redirect_to(SiteSetting.geo_smartlink_fallback_url.presence || "/", allow_other_host: true)
     end
 
@@ -336,7 +373,7 @@ after_initialize do
       link
     end
 
-    def page_html(reason, cc, cards, orig, user_id, email_id)
+    def page_html(reason, cc, cards, orig, user_id, email_id, view_id = nil)
       h = ->(s) { ERB::Util.html_escape(s.to_s) }
       where = ::GeoSmartlink::COUNTRY_NAMES[cc] || "your country"
       title, intro =
@@ -350,8 +387,9 @@ after_initialize do
         end
       intro += cards.any? ? " Here are popular offers that are available to you:" : ""
       forum = "#{Discourse.base_url}/"
-      cards_html = cards.map do |c|
-        href = h.(card_href(c.link, orig, user_id, email_id))
+      cards_html = cards.each_with_index.map do |c, i|
+        # 0.3.0: through the click logger when the view was logged; else the direct /content link as before
+        href = h.(view_id ? "#{Discourse.base_path}/offer-unavailable/c?v=#{view_id}&id=#{c.vsl_id}&p=#{i + 1}" : card_href(c.link, orig, user_id, email_id))
         img = c.image_url.present? ? %(<a class="img" href="#{href}" rel="nofollow noopener"><img src="#{h.(c.image_url)}" alt="#{h.(c.source)}" loading="lazy"></a>) : ""
         <<~CARD
           <div class="card">
@@ -415,6 +453,7 @@ after_initialize do
 
   ::GeoSmartlink::UnavailableEngine.routes.draw do
     get "/" => "unavailable#show"
+    get "/c" => "unavailable#card"
   end
 
   Discourse::Application.routes.append do
