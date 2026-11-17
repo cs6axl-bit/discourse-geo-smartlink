@@ -2,7 +2,7 @@
 
 # name: discourse-geo-smartlink
 # about: Country smart links at /go/<key> (offer_geo_links) plus the /offer-unavailable page: when an offer link would dead-end for the visitor (country blocked by the network, link down, or the click got stuck) the visitor sees the best offers available in their country, same category first. GeoSmartlink.check_url is used by discourse-content-redirector >= 0.7.0.
-# version: 0.3.0
+# version: 0.3.1
 # authors: supshop
 # url: https://github.com/cs6axl-bit/discourse-geo-smartlink
 
@@ -87,9 +87,24 @@ after_initialize do
       nil
     end
 
-    # Country for "will this click work": the network decides by the click IP, so IP first.
+    # iCloud PRIVATE RELAY egress (Cloudflare 104.28/16, Akamai 172.224/12, Fastly 146.75/16 + 140.248/16): the IP's country is only an
+    # approximate region and DB-IP often has it wrong (2026-11-17: UK Blissit clicker on 104.28.40.142 = "BE" → sent to the fallback page,
+    # Orbio saw UK; 7 d: 84 of 104 relay geo blocks with a known user country disagreed) → for relay IPs the user's known country first.
+    RELAY_NETS = %w[104.28.0.0/16 172.224.0.0/12 146.75.0.0/16 140.248.0.0/16].map { |n| IPAddr.new(n) }.freeze
+    def self.relay_ip?(ip)
+      a = IPAddr.new(ip.to_s)
+      RELAY_NETS.any? { |n| n.include?(a) }
+    rescue
+      false
+    end
+
+    # Country for "will this click work": the network decides by the click IP, so IP first (except iCloud Private Relay, above).
     # Returns [country or nil, source].
     def self.visitor_country(request, user_id = nil)
+      if relay_ip?(request.remote_ip)
+        if (c = user_country(user_id)) then return [norm_cc(c), "user-relay"] end
+        if (c = domain_country(user_id)) then return [norm_cc(c), "domain-relay"] end
+      end
       if (c = ip_country(request.remote_ip)) then return [norm_cc(c), "ip"] end
       if (c = user_country(user_id)) then return [norm_cc(c), "user"] end
       if (c = domain_country(user_id)) then return [norm_cc(c), "domain"] end
@@ -355,7 +370,10 @@ after_initialize do
       host = u.host.to_s.downcase
       cur = Rack::Utils.parse_query(u.query.to_s)
       add = TRACK_KEYS.each_with_object({}) { |k, h| h[k] = q[k] if q[k].present? }
-      if ::GeoSmartlink::EVERFLOW_HOST.match?(host)
+      # 0.3.1 (2026-11-17): Everflow DIRECT links too (brand page + offid= + affiliate_id=, e.g. Orbio get-derila.com): a fallback-page
+      # click on Derila reached Orbio without sub4 / sub5 → postback email_id / user_id empty
+      everflow_direct = cur["offid"].to_s.match?(/\A\d+\z/) && cur["affiliate_id"].to_s.match?(/\A\d+\z/)
+      if ::GeoSmartlink::EVERFLOW_HOST.match?(host) || everflow_direct
         add["sub4"] = email_id if email_id
         add["sub5"] = user_id.to_s if user_id
         add["sub2"] = "#{cur["sub2"]}-na" if cur["sub2"].present?
